@@ -24,6 +24,7 @@ from gsoup.image import (
     linear_to_srgb,
 )
 import matplotlib.pyplot as plt
+import pickle
 
 mi.set_variant(
     "cuda_ad_rgb"
@@ -33,7 +34,7 @@ mi.set_variant(
 
 patchs = glob.glob('/home/dcor/niskhizov/AdversarialRendering/botorch_snapshots/*patch*')
 
-anchors_dir = '/home/dcor/niskhizov/rgb_patterns_0_50_150/'
+anchors_dir = '/home/dcor/niskhizov/rgb_patterns_yotam/'
 anchors_paths = glob.glob(f'{anchors_dir}/*')
 
 cam_wh=(256, 256)
@@ -153,6 +154,14 @@ def generate_random_scene(test=False):
 
     focus_distance = np.random.uniform(1.0, 20.0)
 
+    random_patch_rgb = cv2.cvtColor(cv2.imread(random_patch), cv2.COLOR_BGR2RGB)#gsoup.generate_voronoi_diagram(512, 512, 1000)*0+255
+    random_patch_rgb = gsoup.to_float(random_patch_rgb)
+    
+    # random_patch_rgb  =  random_patch_rgb.clip(0.4,0.7)
+    random_patch_rgb = (random_patch_rgb - random_patch_rgb.min()) / (random_patch_rgb.max() - random_patch_rgb.min())
+
+    random_patch_rgb = random_patch_rgb*0.6 + 0.2
+
     scene_dict = {
 
                     "type": "scene",
@@ -197,7 +206,8 @@ def generate_random_scene(test=False):
                         'type': 'principled',
                         'base_color': {
                             'type': 'bitmap',
-                            'filename': f'{random_patch}',
+                            # 'filename': f'{random_patch}',
+                            'data' : random_patch_rgb,
 
                         },
                         'roughness' : roughnes,
@@ -405,7 +415,7 @@ class LightCNN(nn.Module):
         return x
 
 
-ckpt_dir = 'v8_fixed_ckpt'
+ckpt_dir = 'v9_fixed_ckpt'
 if not os.path.exists(ckpt_dir):
     os.makedirs(ckpt_dir)
 # cnn_ds = AnchorsCnnDownsample(3, 64).cuda()
@@ -478,8 +488,8 @@ L1 = nn.L1Loss()
 
 def generate_cam_params():
     sigma = np.random.uniform(1, 4)  # Random sigma for Gaussian blur
-    glow_radius = np.random.randint(10, 60)  # Random glow radius
-    glow_strength = np.random.uniform(1.0, 10.0)  # Random glow strength
+    glow_radius = np.random.randint(10, 20)  # Random glow radius
+    glow_strength = np.random.uniform(1.0, 2.0)  # Random glow strength
 
     return {'sigma':sigma, 'glow_radius': glow_radius, 'glow_strength': glow_strength}
 
@@ -595,6 +605,21 @@ for epoch in tqdm.tqdm(range(10000)):
             # model_input = torch.cat([proj_tex_r, condition])
             output = model(proj_tex_r,condition)
 
+            # physical test 
+            with open("/home/dcor/niskhizov/AdversarialRendering/mitsuba/yotam_patterns_jeep_condition.pkl",'rb') as f:
+                condition_jeep_yotam = pickle.load(f).cuda()
+
+            with open("/home/dcor/niskhizov/AdversarialRendering/mitsuba/yotam_patterns_jeep_frame_unwarped.pkl",'rb') as f:
+                jeep_frame_unwarped = pickle.load(f).cuda()
+
+            output_jeep = model(jeep_frame_unwarped, condition_jeep_yotam)
+
+        physical_loss = L1(output_jeep, jeep_frame_unwarped)
+        experiment.log_metrics({
+            "physical_loss": physical_loss.item(),
+        }, step=epoch)
+        experiment.log_image(output_jeep.permute(1,2,0).detach().cpu().numpy(), name=f'output_jeep.png', step=epoch)
+        experiment.log_image(jeep_frame_unwarped.permute(1,2,0).detach().cpu().numpy(), name=f'jeep_frame_unwarped.png', step=epoch)
         experiment.log_image(output.permute(1,2,0).detach().cpu().numpy(), name=f'output.png', step=epoch)
         experiment.log_image(true_proj.detach().cpu().numpy(), name=f'true_proj.png', step=epoch)
         experiment.log_image(proj_tex_r.permute(1,2,0).detach().cpu().numpy(), name=f'proj_tex_r.png', step=epoch)
